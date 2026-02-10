@@ -1,9 +1,5 @@
 const fastify = require('fastify')({
-    logger: {
-        transport: {
-            target: 'pino-pretty',
-        },
-    },
+    logger: true
 });
 
 const { getChats, getWord, findOrCreateChat, subscribe, unsubscribe } = require('./firestore');
@@ -61,6 +57,8 @@ fastify.post('/webhook', async (request, reply) => {
         const chatId = callback_query.message.chat.id;
         const data = callback_query.data;
 
+        await answerCallbackQuery(callback_query.id);
+
         if (data === '/word') {
             const word = await getWord();
             await sendQuiz(chatId, word);
@@ -71,10 +69,7 @@ fastify.post('/webhook', async (request, reply) => {
             await unsubscribe(chatId);
             await sendMessage(chatId, 'You have been unsubscribed from the daily quiz.');
         }
-
-        await answerCallbackQuery(callback_query.id);
     }
-
 
     reply.send({ ok: true });
 });

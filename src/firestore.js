@@ -9,7 +9,7 @@ const getChats = async () => {
     if (chatsSnapshot.empty) {
         return [];
     }
-    return chatsSnapshot.docs.map(doc => doc.data()));
+    return chatsSnapshot.docs.map(doc => doc.data());
 }
 
 const getWord = async () => {

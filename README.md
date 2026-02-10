@@ -1,8 +1,8 @@
 # Het of De Telegram Bot
 
-This is a Telegram bot that helps you learn the Dutch articles "de" and "het". It provides quizzes in the form of Telegram polls.
+This is a [Telegram bot](https://t.me/het_of_de_artikelen_bot) that helps you learn the Dutch articles "de" and "het". It provides quizzes in the form of Telegram polls.
 
-Inspired by the Telegram channel [Ik zie Nederlands](t.me/grammaNL)
+Inspired by the Telegram channel [Ik zie Nederlands](https://t.me/grammaNL)
 
 ## Features
 
@@ -18,7 +18,17 @@ Inspired by the Telegram channel [Ik zie Nederlands](t.me/grammaNL)
 - **Deployment**: Google Cloud Run
 - **Secrets**: Google Secret Manager
 
-## Setup
+## Bot setup
+1. Inside Telegram go to bot @BotFather
+2. Create a bot with /newbot and save a token
+3. Deploy the backend and get CLOUDRUN_URL
+4. Set up the webhook in Telegram by calling
+    ```
+    https://api.telegram.org/botTELEGRAM_TOKEN/setWebhook?url=https://CLOUDRUN_URL/webhook
+    ```
+See details below.
+
+## Project setup
 
 ### 1. Firestore Database
 
@@ -29,34 +39,6 @@ The bot uses Firestore to store words and chat information.
 - `dictionary`: Stores the Dutch words with their articles and translations.
 - `chats`: Stores user chat information and subscription status.
 
-**Create Firestore Index:**
-
-To enable efficient querying of random words, a composite index has to be created in Firestore for the `dictionary` collection.
-
-1.  Create a `firestore.indexes.json` file with the following content:
-
-    ```json
-    {
-      "indexes": [
-        {
-          "collectionGroup": "dictionary",
-          "queryScope": "COLLECTION",
-          "fields": [
-            {
-              "fieldPath": "random_key",
-              "order": "ASCENDING"
-            }
-          ]
-        }
-      ]
-    }
-    ```
-
-2.  Deploy the indexes to Firestore using the gcloud CLI:
-
-    ```bash
-    gcloud firestore indexes composite create --database='het-of-de-bot' --file=firestore.indexes.json
-    ```
 
 ### 2. Secret Manager
 

@@ -9,6 +9,7 @@ const getBotToken = async () => {
     }
     const secretManager = new SecretManagerServiceClient();
     const projectId = await secretManager.getProjectId();
+    console.log(`projectId = ${projectId}`);
     const [version] = await secretManager.accessSecretVersion({
         name: `projects/${projectId}/secrets/het-of-de-token/versions/latest`,
     });
@@ -38,7 +39,7 @@ const sendMessage = async (chatId, text, reply_markup = undefined) => {
 const sendQuiz = async (chatId, word) => {
     const telegramApi = await getTelegramApi();
 
-    const question = `What is the correct article for "${word.dutch}"?`;
+    const question = `"${word.english}":`;
     const options = [`de ${word.dutch}`, `het ${word.dutch}`];
     const correctOptionId = word.article === 'de' ? 0 : 1;
 
@@ -50,7 +51,7 @@ const sendQuiz = async (chatId, word) => {
         correct_option_id: correctOptionId,
     });
 
-    return sendMessage(chatId, '​', {
+    return sendMessage(chatId, 'more practice:', {
         inline_keyboard: [
             [{ text: 'Next word', callback_data: '/word' }]
         ]
@@ -58,6 +59,7 @@ const sendQuiz = async (chatId, word) => {
 };
 
 const answerCallbackQuery = async (callbackQueryId) => {
+    // console.log(`callbackQueryId = ${callbackQueryId}`);
     const telegramApi = await getTelegramApi();
     return telegramApi.post('/answerCallbackQuery', {
         callback_query_id: callbackQueryId,

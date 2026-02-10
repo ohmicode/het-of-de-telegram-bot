@@ -2,13 +2,14 @@
 FROM node:20-slim AS build
 WORKDIR /usr/src/app
 COPY package*.json ./
-RUN npm install
-COPY . .
-RUN npm run build
+RUN npm ci --production
+#COPY . .
+#RUN npm run build
 
 # Stage 2: Production
 FROM gcr.io/distroless/nodejs20-debian12
 WORKDIR /usr/src/app
-COPY --from=build /usr/src/app/dist ./dist
-COPY --from=build /usr/src/app/package.json ./
-CMD ["dist/index.js"]
+COPY --from=build /usr/src/app/node_modules ./node_modules
+#COPY --from=build /usr/src/app/package.json ./
+COPY src ./src
+CMD ["src/index.js"]
