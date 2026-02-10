@@ -2,6 +2,8 @@
 
 This is a Telegram bot that helps you learn the Dutch articles "de" and "het". It provides quizzes in the form of Telegram polls.
 
+Inspired by the Telegram channel [Ik zie Nederlands](t.me/grammaNL)
+
 ## Features
 
 - **On-demand quizzes**: Get a new quiz with a random word using the `/word` command.
