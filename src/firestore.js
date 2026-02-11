@@ -58,10 +58,20 @@ const unsubscribe = async (chatId) => {
 }
 
 
+const reportMistake = async (wordId, chatId, userName) => {
+    await firestore.collection('mistakes').add({
+        word_id: wordId,
+        chat_id: chatId,
+        name: userName,
+        reported: new Date(),
+    });
+};
+
 module.exports = {
     getChats,
     getWord,
     findOrCreateChat,
     subscribe,
     unsubscribe,
+    reportMistake,
 };

@@ -39,7 +39,7 @@ const sendMessage = async (chatId, text, reply_markup = undefined) => {
 const sendQuiz = async (chatId, word) => {
     const telegramApi = await getTelegramApi();
 
-    const question = `"${word.english}":`;
+    const question = `"${word.english}".\n(${word.example})`;
     const options = [`de ${word.dutch}`, `het ${word.dutch}`];
     const correctOptionId = word.article === 'de' ? 0 : 1;
 
@@ -51,9 +51,10 @@ const sendQuiz = async (chatId, word) => {
         correct_option_id: correctOptionId,
     });
 
-    return sendMessage(chatId, 'more practice:', {
+    return sendMessage(chatId, 'what\'s next?', {
         inline_keyboard: [
-            [{ text: 'Next word', callback_data: '/word' }]
+            [{ text: 'Next word', callback_data: '/word' }],
+            [{ text: 'Report a bug', callback_data: `/report_bug_${word.id}` }]
         ]
     });
 };

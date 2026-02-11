@@ -2,7 +2,7 @@ const fastify = require('fastify')({
     logger: true
 });
 
-const { getChats, getWord, findOrCreateChat, subscribe, unsubscribe } = require('./firestore');
+const { getChats, getWord, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
 const { sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
 
 const HELP_MESSAGE = `
@@ -68,6 +68,11 @@ fastify.post('/webhook', async (request, reply) => {
         } else if (data === '/unsubscribe') {
             await unsubscribe(chatId);
             await sendMessage(chatId, 'You have been unsubscribed from the daily quiz.');
+        } else if (data.startsWith('/report_bug_')) {
+            const wordId = data.replace('/report_bug_', '');
+            const chatName = callback_query.message.chat.first_name || callback_query.message.chat.username;
+            await reportMistake(wordId, chatId, chatName);
+            await sendMessage(chatId, 'Thanks for the heads-up!');
         }
     }
 
