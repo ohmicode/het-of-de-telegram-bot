@@ -89,3 +89,32 @@ This application is designed to be deployed as a container on Google Cloud Run. 
 ## Scheduler
 
 To send daily quizzes to subscribers, set up a scheduler (e.g., Google Cloud Scheduler) to make a GET request to the `/scheduler` endpoint of the service once a day.
+
+## Uploading words to Firestore
+
+There is a Python script in `tools/upload` that can be used to upload a CSV file with words to Firestore.
+
+### 1. Setup
+
+1.  Install the required Python packages:
+
+    ```bash
+    pip3 install -r tools/upload/requirements.txt
+    ```
+
+2.  Authenticate with Google Cloud:
+
+    ```bash
+    gcloud auth application-default login
+    ```
+
+### 2. Run the script
+
+```bash
+python3 tools/upload/upload.py \
+  --project_id PROJECT_ID \
+  --database het-of-de-bot \
+  --collection dictionary \
+  --csv_file tools/upload/word_set.csv
+```
+
