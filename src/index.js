@@ -24,6 +24,36 @@ const WORD_NOT_FOUND_MESSAGE = 'Sorry, this word was not found.';
 
 const formatExplanation = (word) => `${word.article} ${word.dutch}\n${word.explanation || NO_EXPLANATION_MESSAGE}`;
 
+const MAIN_KEYBOARD = {
+    inline_keyboard: [
+        [
+            { text: 'Get a word', callback_data: '/word' },
+            { text: 'Subscribe', callback_data: '/subscribe' },
+            { text: 'Unsubscribe', callback_data: '/unsubscribe' },
+        ],
+    ],
+};
+
+const sendHelp = (chatId) => sendMessage(chatId, HELP_MESSAGE, MAIN_KEYBOARD);
+
+const COMMANDS = {
+    '/start': sendHelp,
+    '/help': sendHelp,
+    '/word': async (chatId) => sendQuiz(chatId, await getWord()),
+    '/subscribe': async (chatId) => {
+        await subscribe(chatId);
+        await sendMessage(chatId, 'You have been subscribed for a daily quiz!');
+    },
+    '/unsubscribe': async (chatId) => {
+        await unsubscribe(chatId);
+        await sendMessage(chatId, 'You have been unsubscribed from the daily quiz.');
+    },
+};
+
+const findCommand = (name) => (Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : undefined);
+
+const parseCommandName = (text) => text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
+
 fastify.post('/webhook', async (request, reply) => {
     const { message, callback_query } = request.body;
 
@@ -32,48 +62,21 @@ fastify.post('/webhook', async (request, reply) => {
         const chatName = message.chat.first_name || message.chat.username;
         await findOrCreateChat(chatId, chatName);
 
-        if (message.text) {
-            const text = message.text.trim();
-
-            if (text.startsWith('/start')) {
-                await sendMessage(chatId, HELP_MESSAGE, {
-                    inline_keyboard: [
-                        [
-                            { text: 'Get a word', callback_data: '/word' },
-                            { text: 'Subscribe', callback_data: '/subscribe' },
-                            { text: 'Unsubscribe', callback_data: '/unsubscribe' },
-                        ],
-                    ]
-                });
-            } else if (text.startsWith('/help')) {
-                await sendMessage(chatId, HELP_MESSAGE, {
-                    inline_keyboard: [
-                        [
-                            { text: 'Get a word', callback_data: '/word' },
-                            { text: 'Subscribe', callback_data: '/subscribe' },
-                            { text: 'Unsubscribe', callback_data: '/unsubscribe' },
-                        ],
-                    ]
-                });
-            }
+        const command = message.text && findCommand(parseCommandName(message.text));
+        if (command) {
+            await command(chatId);
         }
     }
 
     if (callback_query) {
         const chatId = callback_query.message.chat.id;
         const data = callback_query.data;
+        const command = findCommand(data);
 
         await answerCallbackQuery(callback_query.id);
 
-        if (data === '/word') {
-            const word = await getWord();
-            await sendQuiz(chatId, word);
-        } else if (data === '/subscribe') {
-            await subscribe(chatId);
-            await sendMessage(chatId, 'You have been subscribed for a daily quiz!');
-        } else if (data === '/unsubscribe') {
-            await unsubscribe(chatId);
-            await sendMessage(chatId, 'You have been unsubscribed from the daily quiz.');
+        if (command) {
+            await command(chatId);
         } else if (data.startsWith('/report_bug_')) {
             const wordId = data.replace('/report_bug_', '');
             const chatName = callback_query.message.chat.first_name || callback_query.message.chat.username;

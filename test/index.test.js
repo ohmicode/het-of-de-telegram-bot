@@ -110,6 +110,50 @@ describe('index', () => {
                 assert.deepEqual(markup, MAIN_KEYBOARD);
             });
         }
+
+        it('sends a quiz on typed /word', async () => {
+            const word = { id: 1 };
+            stubs.getWord = () => word;
+
+            await postWebhook(textMessage('/word'));
+
+            assert.deepEqual(callsOf('sendQuiz'), [[10, word]]);
+        });
+
+        it('subscribes on typed /subscribe after registering the chat', async () => {
+            await postWebhook(textMessage('/subscribe'));
+
+            assert.deepEqual(calls.map(([name]) => name), ['findOrCreateChat', 'subscribe', 'sendMessage']);
+            assert.deepEqual(callsOf('subscribe'), [[10]]);
+            assert.deepEqual(callsOf('sendMessage'), [[10, 'You have been subscribed for a daily quiz!']]);
+        });
+
+        it('unsubscribes on typed /unsubscribe', async () => {
+            await postWebhook(textMessage('/unsubscribe'));
+
+            assert.deepEqual(callsOf('unsubscribe'), [[10]]);
+            assert.deepEqual(callsOf('sendMessage'), [[10, 'You have been unsubscribed from the daily quiz.']]);
+        });
+
+        it('accepts a command addressed to the bot by name, as in group chats', async () => {
+            await postWebhook(textMessage('/subscribe@het_of_de_artikelen_bot'));
+
+            assert.deepEqual(callsOf('subscribe'), [[10]]);
+        });
+
+        it('ignores arguments and letter case of a command', async () => {
+            await postWebhook(textMessage('/WORD please'));
+
+            assert.equal(callsOf('sendQuiz').length, 1);
+        });
+
+        for (const text of ['/helpme', 'word', 'hello /word', '/constructor', '/explain_1', '/report_bug_1']) {
+            it(`ignores "${text}"`, async () => {
+                await postWebhook(textMessage(text));
+
+                assert.deepEqual(calls.map(([name]) => name), ['findOrCreateChat']);
+            });
+        }
     });
 
     describe('POST /webhook callback queries', () => {
