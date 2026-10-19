@@ -24,7 +24,7 @@ Inspired by the Telegram channel [Ik zie Nederlands](https://t.me/grammaNL)
 3. Deploy the backend and get CLOUDRUN_URL
 4. Set up the webhook in Telegram by calling
     ```
-    https://api.telegram.org/botTELEGRAM_TOKEN/setWebhook?url=https://CLOUDRUN_URL/webhook
+    https://api.telegram.org/botTELEGRAM_TOKEN/setWebhook?url=https://CLOUDRUN_URL/webhook&secret_token=WEBHOOK_SECRET
     ```
 See details below.
 
@@ -42,12 +42,20 @@ The bot uses Firestore to store words and chat information.
 
 ### 2. Secret Manager
 
-The Telegram bot token is stored in Google Secret Manager.
+The Telegram bot token and the webhook secret are stored in Google Secret Manager.
 
 1.  Create a secret in Secret Manager named `het-of-de-token`.
 2.  Add a version to the secret with Telegram bot token as the value.
+3.  Create a secret named `het-of-de-webhook-secret` with a random value, e.g.:
 
-The token is read once on application startup, before the server starts accepting requests. If it cannot be read, the application exits.
+    ```bash
+    openssl rand -hex 32 | tr -d '\n' | gcloud secrets create het-of-de-webhook-secret --data-file=- --project=PROJECT_ID
+    ```
+
+    Telegram allows only the characters `A-Z`, `a-z`, `0-9`, `_` and `-` (1-256 characters) in the webhook secret.
+4.  Grant the Cloud Run service account the `Secret Manager Secret Accessor` role on both secrets.
+
+Telegram sends the webhook secret in the `X-Telegram-Bot-Api-Secret-Token` header of every update. Requests to `/webhook` without the right header are rejected with `401`.
 
 ### 3. Deploy to Cloud Run
 
@@ -83,11 +91,15 @@ This application is designed to be deployed as a container on Google Cloud Run. 
 
     Make a POST request to the Telegram API:
     ```
-    https://api.telegram.org/botTELEGRAM_TOKEN/setWebhook?url=https://CLOUDRUN_URL/webhook
+    https://api.telegram.org/botTELEGRAM_TOKEN/setWebhook?url=https://CLOUDRUN_URL/webhook&secret_token=WEBHOOK_SECRET
     ```
 
     -   Replace `TELEGRAM_TOKEN` with the bot token.
     -   Replace `CLOUDRUN_URL` with the URL of the deployed service.
+    -   Replace `WEBHOOK_SECRET` with the value of the `het-of-de-webhook-secret` secret.
+
+    Call `setWebhook` again whenever the webhook secret changes. Until then, the service rejects updates from Telegram with `401`.
+    Telegram keeps undelivered updates and retries them (for up to 24 hours), so updates are delivered once the webhook is set.
 
 ## Scheduler
 

@@ -20,6 +20,12 @@ mockModule(path.join(__dirname, '../src/firestore'), {
     reportMistake: record('reportMistake'),
 });
 
+const WEBHOOK_SECRET = 'test-webhook-secret';
+
+mockModule(path.join(__dirname, '../src/secrets'), {
+    readSecret: record('readSecret', WEBHOOK_SECRET),
+});
+
 mockModule(path.join(__dirname, '../src/telegram'), {
     loadBotToken: record('loadBotToken'),
     sendMessage: record('sendMessage'),
@@ -39,7 +45,9 @@ require(path.join(__dirname, '../src/index'));
 
 const callsOf = (name) => calls.filter(([callName]) => callName === name).map(([, ...args]) => args);
 
-const postWebhook = (body) => app.inject({ method: 'POST', url: '/webhook', payload: body });
+const SECRET_HEADER = { 'X-Telegram-Bot-Api-Secret-Token': WEBHOOK_SECRET };
+
+const postWebhook = (body, headers = SECRET_HEADER) => app.inject({ method: 'POST', url: '/webhook', payload: body, headers });
 
 const callbackQuery = (data, chat = { id: 10, first_name: 'Anna' }) => ({
     callback_query: { id: 'cb-1', data, message: { chat } },
@@ -58,10 +66,12 @@ const MAIN_KEYBOARD = {
 };
 
 describe('index', () => {
+    let startupCalls;
     let startupCallNames;
 
     before(async () => {
         await app.ready();
+        startupCalls = [...calls];
         startupCallNames = calls.map(([name]) => name);
     });
     after(() => app.close());
@@ -73,7 +83,11 @@ describe('index', () => {
 
     describe('startup', () => {
         it('loads the bot token before listening for requests', () => {
-            assert.deepEqual(startupCallNames, ['loadBotToken', 'listen']);
+            assert.deepEqual(startupCallNames, ['loadBotToken', 'readSecret', 'listen']);
+        });
+
+        it('loads the webhook secret from Secret Manager', () => {
+            assert.ok(startupCalls.some(([name, secretName]) => name === 'readSecret' && secretName === 'het-of-de-webhook-secret'));
         });
     });
 
@@ -295,10 +309,114 @@ describe('index', () => {
             assert.deepEqual(callsOf('sendMessage'), [[10, 'Sorry, this word was not found.']]);
         });
 
-        it('does not register a chat for callback queries', async () => {
+        it('registers the chat for callback queries', async () => {
             await postWebhook(callbackQuery('/explain_42'));
 
-            assert.deepEqual(callsOf('findOrCreateChat'), []);
+            assert.deepEqual(callsOf('findOrCreateChat'), [[10, 'Anna']]);
+        });
+    });
+
+    describe('POST /webhook authentication', () => {
+        const rejectedHeaders = {
+            'no secret token header': {},
+            'a wrong secret token': { 'X-Telegram-Bot-Api-Secret-Token': 'wrong-secret' },
+            'a secret token with a different length': { 'X-Telegram-Bot-Api-Secret-Token': `${WEBHOOK_SECRET}x` },
+            'an empty secret token': { 'X-Telegram-Bot-Api-Secret-Token': '' },
+        };
+
+        for (const [description, headers] of Object.entries(rejectedHeaders)) {
+            it(`rejects a request with ${description}`, async () => {
+                const response = await postWebhook(textMessage('/word'), headers);
+
+                assert.equal(response.statusCode, 401);
+                assert.deepEqual(response.json(), { ok: false });
+                assert.deepEqual(calls, []);
+            });
+        }
+
+        it('accepts a request with the right secret token', async () => {
+            const response = await postWebhook(textMessage('/help'));
+
+            assert.equal(response.statusCode, 200);
+            assert.equal(callsOf('sendMessage').length, 1);
+        });
+
+        it('does not require the secret token for /scheduler', async () => {
+            const response = await app.inject({ method: 'GET', url: '/scheduler' });
+
+            assert.equal(response.statusCode, 200);
+        });
+    });
+
+    describe('POST /webhook error handling', () => {
+        const ERROR_MESSAGE = 'Sorry, something went wrong. Please try again later.';
+        const failWith = (message) => () => {
+            throw new Error(message);
+        };
+
+        it('registers the chat before subscribing from a button', async () => {
+            await postWebhook(callbackQuery('/subscribe'));
+
+            const names = calls.map(([name]) => name);
+            assert.ok(names.indexOf('findOrCreateChat') < names.indexOf('subscribe'));
+        });
+
+        it('responds 200 and notifies the chat when a message handler fails', async () => {
+            stubs.getWord = failWith('Firestore unavailable');
+
+            const response = await postWebhook(textMessage('/word'));
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(response.json(), { ok: true });
+            assert.deepEqual(callsOf('sendMessage'), [[10, ERROR_MESSAGE]]);
+        });
+
+        it('responds 200 and notifies the chat when a callback query handler fails', async () => {
+            stubs.subscribe = failWith('5 NOT_FOUND: No document to update');
+
+            const response = await postWebhook(callbackQuery('/subscribe'));
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(callsOf('sendMessage'), [[10, ERROR_MESSAGE]]);
+        });
+
+        it('responds 200 when registering the chat fails', async () => {
+            stubs.findOrCreateChat = failWith('Cannot use undefined as a Firestore value');
+
+            const response = await postWebhook(textMessage('/help'));
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(callsOf('sendMessage'), [[10, ERROR_MESSAGE]]);
+        });
+
+        it('responds 200 when the error notification fails too', async () => {
+            stubs.sendMessage = failWith('Forbidden: bot was blocked by the user');
+
+            const response = await postWebhook(textMessage('/help'));
+
+            assert.equal(response.statusCode, 200);
+            assert.equal(callsOf('sendMessage').length, 2);
+        });
+
+        it('responds 200 without a notification for a malformed update', async () => {
+            const response = await postWebhook({ callback_query: { id: 'cb-1', data: '/word' } });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(callsOf('sendMessage'), []);
+        });
+
+        it('responds 200 for a request without a body', async () => {
+            const response = await app.inject({ method: 'POST', url: '/webhook', headers: SECRET_HEADER });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(calls, []);
+        });
+
+        it('responds 200 for an update type the bot does not handle', async () => {
+            const response = await postWebhook({ update_id: 1, edited_message: { chat: { id: 10 } } });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(calls, []);
         });
     });
 

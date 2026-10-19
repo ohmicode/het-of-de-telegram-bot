@@ -5,6 +5,7 @@ const fastify = require('fastify')({
 const { getChats, getWord, getWordById, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
 const { loadBotToken, sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
 const { isActiveSubscriber, sendQuizzes } = require('./scheduler');
+const { loadWebhookSecret, verifyTelegramRequest } = require('./webhook-auth');
 
 const HELP_MESSAGE = `
 Welcome to "De of Het" bot!
@@ -21,6 +22,7 @@ You can also use the buttons to interact with the bot.
 
 const NO_EXPLANATION_MESSAGE = 'rule unknown - just memorize it';
 const WORD_NOT_FOUND_MESSAGE = 'Sorry, this word was not found.';
+const ERROR_MESSAGE = 'Sorry, something went wrong. Please try again later.';
 
 const formatExplanation = (word) => `${word.article} ${word.dutch}\n${word.explanation || NO_EXPLANATION_MESSAGE}`;
 
@@ -57,38 +59,67 @@ const findCommand = (name) => (Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : 
 
 const parseCommandName = (text) => text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
 
-fastify.post('/webhook', async (request, reply) => {
-    const { message, callback_query } = request.body;
+const handleMessage = async (message) => {
+    const chatId = message.chat.id;
+    await findOrCreateChat(chatId, resolveName(message.chat, message.from));
 
-    if (message) {
-        const chatId = message.chat.id;
-        const chatName = resolveName(message.chat, message.from);
-        await findOrCreateChat(chatId, chatName);
-
-        const command = message.text && findCommand(parseCommandName(message.text));
-        if (command) {
-            await command(chatId);
-        }
+    const command = message.text && findCommand(parseCommandName(message.text));
+    if (command) {
+        await command(chatId);
     }
+};
 
+const handleCallbackQuery = async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const chatName = resolveName(callbackQuery.message.chat, callbackQuery.from);
+    const data = callbackQuery.data;
+    const command = findCommand(data);
+
+    await Promise.all([
+        answerCallbackQuery(callbackQuery.id),
+        findOrCreateChat(chatId, chatName),
+    ]);
+
+    if (command) {
+        await command(chatId);
+    } else if (data.startsWith('/report_bug_')) {
+        const wordId = data.replace('/report_bug_', '');
+        await reportMistake(wordId, chatId, chatName);
+        await sendMessage(chatId, 'Thanks for the heads-up!');
+    } else if (data.startsWith('/explain_')) {
+        const wordId = data.replace('/explain_', '');
+        const word = await getWordById(wordId);
+        await sendMessage(chatId, word ? formatExplanation(word) : WORD_NOT_FOUND_MESSAGE);
+    }
+};
+
+const handleUpdate = async ({ message, callback_query }) => {
+    if (message) {
+        await handleMessage(message);
+    }
     if (callback_query) {
-        const chatId = callback_query.message.chat.id;
-        const data = callback_query.data;
-        const command = findCommand(data);
+        await handleCallbackQuery(callback_query);
+    }
+};
 
-        await answerCallbackQuery(callback_query.id);
+const getUpdateChatId = (update) => update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id;
 
-        if (command) {
-            await command(chatId);
-        } else if (data.startsWith('/report_bug_')) {
-            const wordId = data.replace('/report_bug_', '');
-            const chatName = resolveName(callback_query.message.chat, callback_query.from);
-            await reportMistake(wordId, chatId, chatName);
-            await sendMessage(chatId, 'Thanks for the heads-up!');
-        } else if (data.startsWith('/explain_')) {
-            const wordId = data.replace('/explain_', '');
-            const word = await getWordById(wordId);
-            await sendMessage(chatId, word ? formatExplanation(word) : WORD_NOT_FOUND_MESSAGE);
+const notifyAboutError = async (chatId, log) => {
+    try {
+        await sendMessage(chatId, ERROR_MESSAGE);
+    } catch (error) {
+        log.error({ chatId, err: error }, 'Failed to notify the chat about an error');
+    }
+};
+
+fastify.post('/webhook', { onRequest: verifyTelegramRequest }, async (request, reply) => {
+    try {
+        await handleUpdate(request.body);
+    } catch (error) {
+        request.log.error({ err: error, updateId: request.body?.update_id }, 'Failed to handle a Telegram update');
+        const chatId = getUpdateChatId(request.body);
+        if (chatId) {
+            await notifyAboutError(chatId, request.log);
         }
     }
 
@@ -120,7 +151,7 @@ fastify.get('/scheduler', async (request, reply) => {
 
 const start = async () => {
     try {
-        await loadBotToken();
+        await Promise.all([loadBotToken(), loadWebhookSecret()]);
         await fastify.listen({ port: process.env.PORT || 8080, host: '0.0.0.0' });
     } catch (err) {
         fastify.log.error(err);

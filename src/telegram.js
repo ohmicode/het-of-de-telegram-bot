@@ -1,4 +1,4 @@
-const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+const { readSecret } = require('./secrets');
 const { wait } = require('./wait');
 
 const TOO_MANY_REQUESTS = 429;
@@ -8,12 +8,7 @@ const DEFAULT_RETRY_AFTER_SECONDS = 1;
 let botToken;
 
 const loadBotToken = async () => {
-    const secretManager = new SecretManagerServiceClient();
-    const projectId = await secretManager.getProjectId();
-    const [version] = await secretManager.accessSecretVersion({
-        name: `projects/${projectId}/secrets/het-of-de-token/versions/latest`,
-    });
-    botToken = version.payload.data.toString();
+    botToken = await readSecret('het-of-de-token');
 };
 
 const getRetryAfterMs = async (response) => {
