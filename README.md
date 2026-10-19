@@ -47,6 +47,8 @@ The Telegram bot token is stored in Google Secret Manager.
 1.  Create a secret in Secret Manager named `het-of-de-token`.
 2.  Add a version to the secret with Telegram bot token as the value.
 
+The token is read once on application startup, before the server starts accepting requests. If it cannot be read, the application exits.
+
 ### 3. Deploy to Cloud Run
 
 This application is designed to be deployed as a container on Google Cloud Run. The build process uses `esbuild` to bundle the entire application into a single, minified file to improve cold start performance.
@@ -67,10 +69,11 @@ This application is designed to be deployed as a container on Google Cloud Run. 
       --platform managed \
       --region REGION \
       --allow-unauthenticated \
-      --service-account=SERVICE_ACCOUNT
+      --service-account=SERVICE_ACCOUNT \
+      --set-env-vars=GOOGLE_CLOUD_PROJECT=PROJECT_ID
     ```
 
-    -   Replace `PROJECT_ID` with the Google Cloud project ID.
+    -   Replace `PROJECT_ID` with the Google Cloud project ID. Setting `GOOGLE_CLOUD_PROJECT` lets the Google Cloud clients skip project ID auto-detection, which speeds up the cold start.
     -   Replace `REGION` with the desired region (e.g., `us-central1`).
     -   Replace `SERVICE_ACCOUNT` with a service account that has access to Firestore and Secret Manager.
 

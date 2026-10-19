@@ -49,7 +49,13 @@ describe('telegram', () => {
         globalThis.fetch = originalFetch;
     });
 
+    it('refuses to call Telegram before the bot token is loaded', async () => {
+        await assert.rejects(telegram.sendMessage(1, 'hello'), /Bot token is not loaded/);
+        assert.deepEqual(state.requests, []);
+    });
+
     it('reads the bot token from Secret Manager only once', async () => {
+        await telegram.loadBotToken();
         await telegram.sendMessage(1, 'first');
         await telegram.sendMessage(1, 'second');
 

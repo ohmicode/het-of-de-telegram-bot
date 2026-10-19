@@ -2,23 +2,20 @@ const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 
 let botToken;
 
-const getBotToken = async () => {
-    if (botToken) {
-        return botToken;
-    }
+const loadBotToken = async () => {
     const secretManager = new SecretManagerServiceClient();
     const projectId = await secretManager.getProjectId();
-    console.log(`projectId = ${projectId}`);
     const [version] = await secretManager.accessSecretVersion({
         name: `projects/${projectId}/secrets/het-of-de-token/versions/latest`,
     });
     botToken = version.payload.data.toString();
-    return botToken;
 };
 
 const callTelegramApi = async (method, payload) => {
-    const token = await getBotToken();
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    if (!botToken) {
+        throw new Error('Bot token is not loaded, call loadBotToken() on startup');
+    }
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -63,13 +60,13 @@ const sendQuiz = async (chatId, word) => {
 };
 
 const answerCallbackQuery = async (callbackQueryId) => {
-    // console.log(`callbackQueryId = ${callbackQueryId}`);
     return callTelegramApi('answerCallbackQuery', {
         callback_query_id: callbackQueryId,
     });
 };
 
 module.exports = {
+    loadBotToken,
     sendMessage,
     sendQuiz,
     answerCallbackQuery,

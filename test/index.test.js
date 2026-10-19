@@ -21,6 +21,7 @@ mockModule(path.join(__dirname, '../src/firestore'), {
 });
 
 mockModule(path.join(__dirname, '../src/telegram'), {
+    loadBotToken: record('loadBotToken'),
     sendMessage: record('sendMessage'),
     sendQuiz: record('sendQuiz'),
     answerCallbackQuery: record('answerCallbackQuery'),
@@ -30,7 +31,7 @@ let app;
 const realFastify = require('fastify');
 mockModule('fastify', (options) => {
     app = realFastify({ ...options, logger: false });
-    app.listen = async () => {};
+    app.listen = record('listen');
     return app;
 });
 
@@ -57,12 +58,23 @@ const MAIN_KEYBOARD = {
 };
 
 describe('index', () => {
-    before(() => app.ready());
+    let startupCallNames;
+
+    before(async () => {
+        await app.ready();
+        startupCallNames = calls.map(([name]) => name);
+    });
     after(() => app.close());
 
     beforeEach(() => {
         calls.length = 0;
         Object.keys(stubs).forEach(key => delete stubs[key]);
+    });
+
+    describe('startup', () => {
+        it('loads the bot token before listening for requests', () => {
+            assert.deepEqual(startupCallNames, ['loadBotToken', 'listen']);
+        });
     });
 
     describe('POST /webhook messages', () => {

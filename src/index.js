@@ -3,7 +3,7 @@ const fastify = require('fastify')({
 });
 
 const { getChats, getWord, getWordById, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
-const { sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
+const { loadBotToken, sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
 
 const HELP_MESSAGE = `
 Welcome to "De of Het" bot!
@@ -113,6 +113,7 @@ fastify.get('/scheduler', async (request, reply) => {
 
 const start = async () => {
     try {
+        await loadBotToken();
         await fastify.listen({ port: process.env.PORT || 8080, host: '0.0.0.0' });
     } catch (err) {
         fastify.log.error(err);
