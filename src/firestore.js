@@ -1,4 +1,14 @@
 const { Firestore } = require('@google-cloud/firestore');
+const {
+    NO_ANSWERS,
+    countPollAnswers,
+    countNewAnswers,
+    hasAnswers,
+    addAnswers,
+    calculateDifficulty,
+} = require('./statistics');
+
+const POLL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const firestore = new Firestore({
     databaseId: 'het-of-de-bot',
@@ -78,6 +88,44 @@ const reportMistake = async (wordId, chatId, userName) => {
     });
 };
 
+const savePoll = async (pollId, wordId, correctOptionId) => {
+    const created = new Date();
+    await firestore.collection('polls').doc(pollId).set({
+        word_id: Number(wordId),
+        correct_option_id: correctOptionId,
+        counts: { ...NO_ANSWERS },
+        created,
+        expires: new Date(created.getTime() + POLL_RETENTION_MS),
+    });
+};
+
+const recordPollAnswers = async (poll) => firestore.runTransaction(async (transaction) => {
+    const pollRef = firestore.collection('polls').doc(poll.id);
+    const pollSnapshot = await transaction.get(pollRef);
+    if (!pollSnapshot.exists) {
+        return false;
+    }
+
+    const { word_id, correct_option_id, counts } = pollSnapshot.data();
+    const newAnswers = countNewAnswers(counts, countPollAnswers(poll.options, correct_option_id));
+    if (!hasAnswers(newAnswers)) {
+        return false;
+    }
+
+    const wordSnapshot = await transaction.get(firestore.collection('dictionary')
+        .where('id', '==', word_id)
+        .limit(1));
+    if (wordSnapshot.empty) {
+        return false;
+    }
+
+    const wordDocument = wordSnapshot.docs[0];
+    const statistics = addAnswers(wordDocument.data().statistics ?? NO_ANSWERS, newAnswers);
+    transaction.update(wordDocument.ref, { statistics, difficulty: calculateDifficulty(statistics) });
+    transaction.update(pollRef, { counts: addAnswers(counts, newAnswers) });
+    return true;
+});
+
 module.exports = {
     getChats,
     getWord,
@@ -86,4 +134,6 @@ module.exports = {
     subscribe,
     unsubscribe,
     reportMistake,
+    savePoll,
+    recordPollAnswers,
 };

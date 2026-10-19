@@ -2,10 +2,22 @@ const fastify = require('fastify')({
     logger: true
 });
 
-const { getChats, getWord, getWordById, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
+const {
+    getChats,
+    getWord,
+    getWordById,
+    findOrCreateChat,
+    subscribe,
+    unsubscribe,
+    reportMistake,
+    savePoll,
+    recordPollAnswers,
+} = require('./firestore');
 const { loadBotToken, sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
 const { isActiveSubscriber, sendQuizzes } = require('./scheduler');
 const { loadWebhookSecret, verifyTelegramRequest } = require('./webhook-auth');
+const { parseCommandName, parseCallbackData, isWordId } = require('./commands');
+const { describeUpdate, truncateLongStrings } = require('./update-log');
 
 const HELP_MESSAGE = `
 Welcome to "De of Het" bot!
@@ -36,12 +48,21 @@ const MAIN_KEYBOARD = {
     ],
 };
 
+const sendTrackedQuiz = async (chatId, word) => {
+    const { pollId, correctOptionId } = await sendQuiz(chatId, word);
+    try {
+        await savePoll(pollId, word.id, correctOptionId);
+    } catch (error) {
+        fastify.log.error({ err: error, pollId, wordId: word.id }, 'Failed to save a poll for statistics');
+    }
+};
+
 const sendHelp = (chatId) => sendMessage(chatId, HELP_MESSAGE, MAIN_KEYBOARD);
 
 const COMMANDS = {
     '/start': sendHelp,
     '/help': sendHelp,
-    '/word': async (chatId) => sendQuiz(chatId, await getWord()),
+    '/word': async (chatId) => sendTrackedQuiz(chatId, await getWord()),
     '/subscribe': async (chatId) => {
         await subscribe(chatId);
         await sendMessage(chatId, 'You have been subscribed for a daily quiz!');
@@ -57,8 +78,6 @@ const resolveName = (chat, from) =>
 
 const findCommand = (name) => (Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : undefined);
 
-const parseCommandName = (text) => text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
-
 const handleMessage = async (message) => {
     const chatId = message.chat.id;
     await findOrCreateChat(chatId, resolveName(message.chat, message.from));
@@ -72,8 +91,8 @@ const handleMessage = async (message) => {
 const handleCallbackQuery = async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const chatName = resolveName(callbackQuery.message.chat, callbackQuery.from);
-    const data = callbackQuery.data;
-    const command = findCommand(data);
+    const { command: commandName, wordId } = parseCallbackData(callbackQuery.data);
+    const command = findCommand(commandName);
 
     await Promise.all([
         answerCallbackQuery(callbackQuery.id),
@@ -82,23 +101,50 @@ const handleCallbackQuery = async (callbackQuery) => {
 
     if (command) {
         await command(chatId);
-    } else if (data.startsWith('/report_bug_')) {
-        const wordId = data.replace('/report_bug_', '');
+    } else if (wordId === undefined) {
+        return;
+    } else if (commandName === '/report_bug') {
         await reportMistake(wordId, chatId, chatName);
         await sendMessage(chatId, 'Thanks for the heads-up!');
-    } else if (data.startsWith('/explain_')) {
-        const wordId = data.replace('/explain_', '');
+    } else if (commandName === '/explain') {
         const word = await getWordById(wordId);
         await sendMessage(chatId, word ? formatExplanation(word) : WORD_NOT_FOUND_MESSAGE);
     }
 };
 
-const handleUpdate = async ({ message, callback_query }) => {
+const handleUpdate = async ({ message, callback_query, poll }) => {
     if (message) {
         await handleMessage(message);
     }
     if (callback_query) {
         await handleCallbackQuery(callback_query);
+    }
+    if (poll) {
+        await recordPollAnswers(poll);
+    }
+};
+
+const isRecognizedMessage = (message) =>
+    Boolean(message?.chat) && typeof message.text === 'string' && findCommand(parseCommandName(message.text)) !== undefined;
+
+const isRecognizedCallbackQuery = (callbackQuery) => {
+    if (!callbackQuery?.message?.chat || typeof callbackQuery.data !== 'string') {
+        return false;
+    }
+    const { command, wordId } = parseCallbackData(callbackQuery.data);
+    return wordId === undefined ? findCommand(command) !== undefined : isWordId(wordId);
+};
+
+const isRecognizedPoll = (poll) => typeof poll?.id === 'string';
+
+const isRecognizedUpdate = (update) =>
+    isRecognizedMessage(update?.message) || isRecognizedCallbackQuery(update?.callback_query) || isRecognizedPoll(update?.poll);
+
+const logUpdate = (update, log) => {
+    if (isRecognizedUpdate(update)) {
+        log.info(describeUpdate(update), 'Telegram update');
+    } else {
+        log.info({ update: truncateLongStrings(update) }, 'Unrecognized Telegram update');
     }
 };
 
@@ -113,6 +159,7 @@ const notifyAboutError = async (chatId, log) => {
 };
 
 fastify.post('/webhook', { onRequest: verifyTelegramRequest }, async (request, reply) => {
+    logUpdate(request.body, request.log);
     try {
         await handleUpdate(request.body);
     } catch (error) {
@@ -137,7 +184,7 @@ fastify.get('/scheduler', async (request, reply) => {
         const word = await getWord();
         const { sent, failures } = await sendQuizzes(
             subscribers.map(chat => chat.id),
-            chatId => sendQuiz(chatId, word),
+            chatId => sendTrackedQuiz(chatId, word),
         );
 
         failures.forEach(({ chatId, error }) => fastify.log.warn({ chatId, err: error }, 'Failed to send a quiz'));

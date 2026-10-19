@@ -9,6 +9,7 @@ Inspired by the Telegram channel [Ik zie Nederlands](https://t.me/grammaNL)
 - **On-demand quizzes**: Get a new quiz with a random word using the `/word` command.
 - **Subscriptions**: Subscribe to receive a quiz daily using the `/subscribe` command.
 - **Help command**: Get a list of available commands with `/help`.
+- **Answer statistics**: Correct and incorrect answers are counted per word, without collecting any user data.
 
 ## Tech Stack
 
@@ -38,6 +39,28 @@ The bot uses Firestore to store words and chat information.
 
 - `dictionary`: Stores the Dutch words with their articles and translations.
 - `chats`: Stores user chat information and subscription status.
+- `mistakes`: Stores mistakes reported by users.
+- `polls`: Maps sent quiz polls to words to collect answer statistics. Polls are removed automatically 30 days after they were sent.
+
+**Answer statistics:**
+
+Old polls are removed by a Firestore TTL policy on the `polls.expires` field. Create the policy once, and exempt the field from indexing, since it is never queried:
+
+```bash
+gcloud firestore fields ttls update expires \
+  --collection-group=polls \
+  --database=het-of-de-bot \
+  --enable-ttl \
+  --project=PROJECT_ID
+
+gcloud firestore indexes fields update expires \
+  --collection-group=polls \
+  --database=het-of-de-bot \
+  --disable-indexes \
+  --project=PROJECT_ID
+```
+
+Firestore usually deletes expired polls within 24 hours after `expires`. Answers to a poll after it was removed are not counted.
 
 
 ### 2. Secret Manager
@@ -97,6 +120,12 @@ This application is designed to be deployed as a container on Google Cloud Run. 
     -   Replace `TELEGRAM_TOKEN` with the bot token.
     -   Replace `CLOUDRUN_URL` with the URL of the deployed service.
     -   Replace `WEBHOOK_SECRET` with the value of the `het-of-de-webhook-secret` secret.
+
+    To limit the updates Telegram sends to the ones the bot uses, add `allowed_updates` (URL-encoded JSON array):
+    ```
+    https://api.telegram.org/botTELEGRAM_TOKEN/setWebhook?url=https://CLOUDRUN_URL/webhook&secret_token=WEBHOOK_SECRET&allowed_updates=%5B%22message%22%2C%22callback_query%22%2C%22poll%22%5D
+    ```
+    This is `["message","callback_query","poll"]`. Extend the list when the bot starts handling other update types.
 
     Call `setWebhook` again whenever the webhook secret changes. Until then, the service rejects updates from Telegram with `401`.
     Telegram keeps undelivered updates and retries them (for up to 24 hours), so updates are delivered once the webhook is set.

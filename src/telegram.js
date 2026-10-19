@@ -51,21 +51,24 @@ const sendQuiz = async (chatId, word) => {
     const options = [`de ${word.dutch}`, `het ${word.dutch}`];
     const correctOptionId = word.article === 'de' ? 0 : 1;
 
-    await callTelegramApi('sendPoll', {
+    const { result } = await callTelegramApi('sendPoll', {
         chat_id: chatId,
         question,
         options: JSON.stringify(options),
         type: 'quiz',
         correct_option_id: correctOptionId,
+        is_anonymous: true,
     });
 
-    return sendMessage(chatId, 'Do you want to learn more?', {
+    await sendMessage(chatId, 'Do you want to learn more?', {
         inline_keyboard: [
             [{ text: 'Explain', callback_data: `/explain_${word.id}` }],
             [{ text: 'Report a bug', callback_data: `/report_bug_${word.id}` }],
             [{ text: 'Next word', callback_data: '/word' }]
         ]
     });
+
+    return { pollId: result.poll.id, correctOptionId };
 };
 
 const answerCallbackQuery = async (callbackQueryId) => {

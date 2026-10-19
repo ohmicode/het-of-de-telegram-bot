@@ -143,7 +143,13 @@ describe('telegram', () => {
     });
 
     describe('sendQuiz', () => {
-        it('sends a quiz poll with de/het options', async () => {
+        const pollResponse = () => jsonResponse({ ok: true, result: { message_id: 7, poll: { id: 'poll-1' } } });
+
+        beforeEach(() => {
+            state.responses = [pollResponse()];
+        });
+
+        it('sends an anonymous quiz poll with de/het options', async () => {
             await telegram.sendQuiz(1, word);
 
             assert.deepEqual(state.posts[0], {
@@ -154,8 +160,13 @@ describe('telegram', () => {
                     options: JSON.stringify(['de boek', 'het boek']),
                     type: 'quiz',
                     correct_option_id: 1,
+                    is_anonymous: true,
                 },
             });
+        });
+
+        it('returns the poll id and the correct option for statistics', async () => {
+            assert.deepEqual(await telegram.sendQuiz(1, word), { pollId: 'poll-1', correctOptionId: 1 });
         });
 
         it('marks the "de" option as correct for de-words', async () => {

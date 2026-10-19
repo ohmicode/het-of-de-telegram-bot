@@ -3,11 +3,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { mockModule } = require('./helpers/mock-module');
 
-const snapshotOf = (items) => ({
-    empty: items.length === 0,
-    docs: items.map(item => ({ data: () => item })),
-});
-
 const createFakeFirestore = () => {
     const state = {
         queryResults: [],
@@ -15,7 +10,23 @@ const createFakeFirestore = () => {
         documents: new Map(),
         updates: [],
         added: [],
+        transactions: 0,
     };
+
+    const createDocRef = (collectionName, docId) => {
+        const key = `${collectionName}/${docId}`;
+        return {
+            key,
+            get: async () => ({ exists: state.documents.has(key), data: () => state.documents.get(key) }),
+            set: async (data) => state.documents.set(key, data),
+            update: async (data) => state.updates.push({ key, data }),
+        };
+    };
+
+    const snapshotOf = (collectionName, items) => ({
+        empty: items.length === 0,
+        docs: items.map((item, index) => ({ data: () => item, ref: createDocRef(collectionName, `doc-${index}`) })),
+    });
 
     const createQuery = (collectionName) => {
         const query = { collection: collectionName, where: [], orderBy: null, limit: null };
@@ -33,17 +44,24 @@ const createFakeFirestore = () => {
                 query.limit = count;
                 return builder;
             },
-            get: async () => snapshotOf(state.queryResults.shift() ?? []),
+            get: async () => snapshotOf(collectionName, state.queryResults.shift() ?? []),
         };
         return builder;
     };
 
-    const createDocRef = (collectionName, docId) => {
-        const key = `${collectionName}/${docId}`;
+    const createTransaction = () => {
+        let hasWrites = false;
         return {
-            get: async () => ({ exists: state.documents.has(key), data: () => state.documents.get(key) }),
-            set: async (data) => state.documents.set(key, data),
-            update: async (data) => state.updates.push({ key, data }),
+            get: async (refOrQuery) => {
+                if (hasWrites) {
+                    throw new Error('Firestore transactions require all reads to be executed before all writes');
+                }
+                return refOrQuery.get();
+            },
+            update: (ref, data) => {
+                hasWrites = true;
+                state.updates.push({ key: ref.key, data });
+            },
         };
     };
 
@@ -59,6 +77,11 @@ const createFakeFirestore = () => {
                 add: async (data) => state.added.push({ collection: collectionName, data }),
             };
         }
+
+        async runTransaction(updateFunction) {
+            state.transactions += 1;
+            return updateFunction(createTransaction());
+        }
     }
 
     return { Firestore, state };
@@ -70,6 +93,8 @@ const firestore = require(path.join(__dirname, '../src/firestore'));
 
 const lastQuery = () => fake.state.queries.at(-1);
 
+const dictionaryQueried = () => fake.state.queries.some(({ collection }) => collection === 'dictionary');
+
 describe('firestore', () => {
     beforeEach(() => {
         fake.state.queryResults = [];
@@ -77,6 +102,7 @@ describe('firestore', () => {
         fake.state.documents.clear();
         fake.state.updates = [];
         fake.state.added = [];
+        fake.state.transactions = 0;
     });
 
     it('uses the het-of-de-bot database', () => {
@@ -205,6 +231,123 @@ describe('firestore', () => {
             await firestore.reportMistake(42, 5, 'Anna');
 
             assert.equal(fake.state.added[0].data.word_id, 42);
+        });
+    });
+
+    describe('savePoll', () => {
+        it('stores the word and the correct option of a poll with empty counts', async () => {
+            await firestore.savePoll('poll-1', 42, 1);
+
+            const poll = fake.state.documents.get('polls/poll-1');
+            assert.equal(poll.word_id, 42);
+            assert.equal(poll.correct_option_id, 1);
+            assert.deepEqual(poll.counts, { correct: 0, incorrect: 0 });
+            assert.ok(poll.created instanceof Date);
+        });
+
+        it('expires the poll 30 days after creation', async () => {
+            await firestore.savePoll('poll-1', 42, 1);
+
+            const { created, expires } = fake.state.documents.get('polls/poll-1');
+            assert.ok(expires instanceof Date);
+            assert.equal(expires.getTime() - created.getTime(), 30 * 24 * 60 * 60 * 1000);
+        });
+
+        it('stores the word id as a number, matching dictionary.id', async () => {
+            await firestore.savePoll('poll-1', '42', 1);
+
+            assert.equal(fake.state.documents.get('polls/poll-1').word_id, 42);
+        });
+
+        it('stores no chat or user data', async () => {
+            await firestore.savePoll('poll-1', 42, 1);
+
+            assert.deepEqual(
+                Object.keys(fake.state.documents.get('polls/poll-1')).sort(),
+                ['correct_option_id', 'counts', 'created', 'expires', 'word_id'],
+            );
+        });
+    });
+
+    describe('recordPollAnswers', () => {
+        const pollUpdate = (deVotes, hetVotes) => ({
+            id: 'poll-1',
+            options: [
+                { text: 'de boek', voter_count: deVotes },
+                { text: 'het boek', voter_count: hetVotes },
+            ],
+        });
+
+        const storePoll = (counts = { correct: 0, incorrect: 0 }) => fake.state.documents.set('polls/poll-1', {
+            word_id: 42,
+            correct_option_id: 1,
+            counts,
+        });
+
+        it('adds new answers to the word statistics and the poll counts', async () => {
+            storePoll({ correct: 2, incorrect: 1 });
+            fake.state.queryResults.push([{ id: 42, statistics: { correct: 10, incorrect: 4 } }]);
+
+            assert.equal(await firestore.recordPollAnswers(pollUpdate(2, 3)), true);
+
+            assert.equal(fake.state.transactions, 1);
+            assert.equal(lastQuery().collection, 'dictionary');
+            assert.deepEqual(lastQuery().where, [['id', '==', 42]]);
+            assert.equal(lastQuery().limit, 1);
+            assert.deepEqual(fake.state.updates, [
+                { key: 'dictionary/doc-0', data: { statistics: { correct: 11, incorrect: 5 }, difficulty: 5 / 16 } },
+                { key: 'polls/poll-1', data: { counts: { correct: 3, incorrect: 2 } } },
+            ]);
+        });
+
+        it('keeps difficulty null while the word has 10 answers or fewer', async () => {
+            storePoll();
+            fake.state.queryResults.push([{ id: 42, statistics: { correct: 0, incorrect: 0 } }]);
+
+            await firestore.recordPollAnswers(pollUpdate(1, 0));
+
+            assert.deepEqual(fake.state.updates[0].data, { statistics: { correct: 0, incorrect: 1 }, difficulty: null });
+        });
+
+        it('starts from zero when the word has no statistics', async () => {
+            storePoll();
+            fake.state.queryResults.push([{ id: 42 }]);
+
+            await firestore.recordPollAnswers(pollUpdate(0, 1));
+
+            assert.deepEqual(fake.state.updates[0].data.statistics, { correct: 1, incorrect: 0 });
+        });
+
+        it('ignores an unknown or expired poll', async () => {
+            assert.equal(await firestore.recordPollAnswers(pollUpdate(0, 1)), false);
+
+            assert.equal(dictionaryQueried(), false);
+            assert.deepEqual(fake.state.updates, []);
+        });
+
+        it('ignores a repeated update without reading the word', async () => {
+            storePoll({ correct: 1, incorrect: 0 });
+
+            assert.equal(await firestore.recordPollAnswers(pollUpdate(0, 1)), false);
+
+            assert.equal(dictionaryQueried(), false);
+            assert.deepEqual(fake.state.updates, []);
+        });
+
+        it('ignores an older update with lower counts', async () => {
+            storePoll({ correct: 3, incorrect: 2 });
+
+            assert.equal(await firestore.recordPollAnswers(pollUpdate(1, 2)), false);
+
+            assert.deepEqual(fake.state.updates, []);
+        });
+
+        it('ignores a poll whose word no longer exists', async () => {
+            storePoll();
+
+            assert.equal(await firestore.recordPollAnswers(pollUpdate(0, 1)), false);
+
+            assert.deepEqual(fake.state.updates, []);
         });
     });
 });

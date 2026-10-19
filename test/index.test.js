@@ -18,6 +18,8 @@ mockModule(path.join(__dirname, '../src/firestore'), {
     subscribe: record('subscribe'),
     unsubscribe: record('unsubscribe'),
     reportMistake: record('reportMistake'),
+    savePoll: record('savePoll'),
+    recordPollAnswers: record('recordPollAnswers', true),
 });
 
 const WEBHOOK_SECRET = 'test-webhook-secret';
@@ -29,19 +31,23 @@ mockModule(path.join(__dirname, '../src/secrets'), {
 mockModule(path.join(__dirname, '../src/telegram'), {
     loadBotToken: record('loadBotToken'),
     sendMessage: record('sendMessage'),
-    sendQuiz: record('sendQuiz'),
+    sendQuiz: record('sendQuiz', { pollId: 'poll-1', correctOptionId: 1 }),
     answerCallbackQuery: record('answerCallbackQuery'),
 });
 
 let app;
+const logEntries = [];
 const realFastify = require('fastify');
 mockModule('fastify', (options) => {
-    app = realFastify({ ...options, logger: false });
+    const logger = { level: 'info', stream: { write: (line) => logEntries.push(JSON.parse(line)) } };
+    app = realFastify({ ...options, logger });
     app.listen = record('listen');
     return app;
 });
 
 require(path.join(__dirname, '../src/index'));
+
+const updateLogs = () => logEntries.filter(({ msg }) => msg === 'Telegram update');
 
 const callsOf = (name) => calls.filter(([callName]) => callName === name).map(([, ...args]) => args);
 
@@ -78,6 +84,7 @@ describe('index', () => {
 
     beforeEach(() => {
         calls.length = 0;
+        logEntries.length = 0;
         Object.keys(stubs).forEach(key => delete stubs[key]);
     });
 
@@ -175,6 +182,28 @@ describe('index', () => {
             assert.deepEqual(callsOf('sendQuiz'), [[10, word]]);
         });
 
+        it('saves the sent poll for statistics', async () => {
+            stubs.getWord = () => ({ id: 7 });
+
+            await postWebhook(textMessage('/word'));
+
+            assert.deepEqual(calls.map(([name]) => name), ['findOrCreateChat', 'getWord', 'sendQuiz', 'savePoll']);
+            assert.deepEqual(callsOf('savePoll'), [['poll-1', 7, 1]]);
+        });
+
+        it('does not notify the chat when only saving the poll fails', async () => {
+            stubs.getWord = () => ({ id: 7 });
+            stubs.savePoll = () => {
+                throw new Error('Firestore unavailable');
+            };
+
+            const response = await postWebhook(textMessage('/word'));
+
+            assert.equal(response.statusCode, 200);
+            assert.equal(callsOf('sendQuiz').length, 1);
+            assert.deepEqual(callsOf('sendMessage'), []);
+        });
+
         it('subscribes on typed /subscribe after registering the chat', async () => {
             await postWebhook(textMessage('/subscribe'));
 
@@ -240,6 +269,13 @@ describe('index', () => {
 
             assert.deepEqual(callsOf('unsubscribe'), [[10]]);
             assert.deepEqual(callsOf('sendMessage'), [[10, 'You have been unsubscribed from the daily quiz.']]);
+        });
+
+        it('ignores /explain and /report_bug without a word id', async () => {
+            await postWebhook(callbackQuery('/explain'));
+            await postWebhook(callbackQuery('/report_bug'));
+
+            assert.deepEqual(calls.map(([name]) => name).filter(name => !['answerCallbackQuery', 'findOrCreateChat'].includes(name)), []);
         });
 
         it('reports a mistake on /report_bug_<id>', async () => {
@@ -313,6 +349,153 @@ describe('index', () => {
             await postWebhook(callbackQuery('/explain_42'));
 
             assert.deepEqual(callsOf('findOrCreateChat'), [[10, 'Anna']]);
+        });
+    });
+
+    describe('POST /webhook poll updates', () => {
+        const poll = {
+            id: 'poll-1',
+            type: 'quiz',
+            is_anonymous: true,
+            total_voter_count: 1,
+            options: [{ text: 'de boek', voter_count: 0 }, { text: 'het boek', voter_count: 1 }],
+        };
+
+        it('records poll answers for statistics', async () => {
+            const response = await postWebhook({ update_id: 1, poll });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(calls, [['recordPollAnswers', poll]]);
+        });
+
+        it('responds 200 without notifying anyone when recording fails', async () => {
+            stubs.recordPollAnswers = () => {
+                throw new Error('Firestore unavailable');
+            };
+
+            const response = await postWebhook({ update_id: 1, poll });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(callsOf('sendMessage'), []);
+        });
+
+        it('ignores poll_answer updates, which are not sent for anonymous polls', async () => {
+            const response = await postWebhook({ update_id: 1, poll_answer: { poll_id: 'poll-1', option_ids: [1] } });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(calls, []);
+        });
+    });
+
+    describe('POST /webhook update log', () => {
+        const unrecognizedLogs = () => logEntries.filter(({ msg }) => msg === 'Unrecognized Telegram update');
+
+        it('logs a recognized message command without personal data', async () => {
+            await postWebhook({
+                update_id: 1,
+                message: { chat: { id: 10, type: 'private', first_name: 'Anna' }, from: { id: 10, first_name: 'Anna' }, text: '/word' },
+            });
+
+            const [entry] = updateLogs();
+            assert.equal(entry.level, 30);
+            assert.equal(entry.updateId, 1);
+            assert.equal(entry.type, 'message');
+            assert.equal(entry.chatId, 10);
+            assert.equal(entry.chatType, 'private');
+            assert.equal(entry.command, '/word');
+            assert.doesNotMatch(JSON.stringify(entry), /Anna/);
+            assert.deepEqual(unrecognizedLogs(), []);
+        });
+
+        it('logs a recognized callback query command with the word id', async () => {
+            await postWebhook({ update_id: 2, ...callbackQuery('/explain_42') });
+
+            const [entry] = updateLogs();
+            assert.equal(entry.type, 'callback_query');
+            assert.equal(entry.command, '/explain');
+            assert.equal(entry.wordId, 42);
+            assert.doesNotMatch(JSON.stringify(entry), /Anna/);
+        });
+
+        it('logs a poll update with its votes', async () => {
+            await postWebhook({ update_id: 3, poll: { id: 'poll-1', options: [{ voter_count: 0 }, { voter_count: 2 }] } });
+
+            const [entry] = updateLogs();
+            assert.equal(entry.type, 'poll');
+            assert.equal(entry.pollId, 'poll-1');
+            assert.deepEqual(entry.votes, [0, 2]);
+        });
+
+        const unrecognizedUpdates = {
+            'free text': { update_id: 4, ...textMessage('hello, I am Anna') },
+            'an unknown typed command': { update_id: 4, ...textMessage('/helpme') },
+            'a message without text': { update_id: 4, message: { chat: { id: 10, first_name: 'Anna' }, sticker: { emoji: 'x' } } },
+            'an unknown callback query command': { update_id: 4, ...callbackQuery('/unknown') },
+            'a word command with a non-numeric word id': { update_id: 4, ...callbackQuery('/explain_abc') },
+            'a word command without a word id': { update_id: 4, ...callbackQuery('/explain') },
+            'a callback query without a message': { update_id: 4, callback_query: { id: 'cb-1', data: '/word', from: { first_name: 'Anna' } } },
+            'an update type the bot does not handle': { update_id: 4, edited_message: { chat: { id: 10, first_name: 'Anna' }, text: 'hi' } },
+            'a poll without an id': { update_id: 4, poll: { options: [] } },
+        };
+
+        for (const [description, update] of Object.entries(unrecognizedUpdates)) {
+            it(`logs the full update for ${description}`, async () => {
+                await postWebhook(update);
+
+                assert.deepEqual(updateLogs(), []);
+                assert.deepEqual(unrecognizedLogs().map(({ update: logged }) => logged), [update]);
+            });
+        }
+
+        it('trims long fields of an unrecognized update to 200 characters', async () => {
+            const longText = 'a'.repeat(10000);
+            const longName = 'b'.repeat(300);
+
+            await postWebhook({ update_id: 5, message: { chat: { id: 10, first_name: longName }, text: longText } });
+
+            const [{ update }] = unrecognizedLogs();
+            assert.equal(update.message.text, 'a'.repeat(200));
+            assert.equal(update.message.chat.first_name, 'b'.repeat(200));
+            assert.equal(update.message.chat.id, 10);
+        });
+
+        it('trims long fields only in the log, not for handling', async () => {
+            const longName = 'b'.repeat(300);
+
+            await postWebhook({ update_id: 5, message: { chat: { id: 10, first_name: longName }, text: 'hello' } });
+
+            assert.equal(unrecognizedLogs()[0].update.message.chat.first_name, 'b'.repeat(200));
+            assert.deepEqual(callsOf('findOrCreateChat'), [[10, longName]]);
+        });
+
+        it('logs a request without a body as unrecognized', async () => {
+            await app.inject({ method: 'POST', url: '/webhook', headers: SECRET_HEADER });
+
+            assert.equal(unrecognizedLogs().length, 1);
+        });
+
+        it('logs the update before handling it, even when handling fails', async () => {
+            stubs.findOrCreateChat = () => {
+                throw new Error('Firestore unavailable');
+            };
+
+            await postWebhook({ update_id: 6, ...textMessage('/help') });
+
+            const messages = logEntries.map(({ msg }) => msg);
+            assert.ok(messages.indexOf('Telegram update') < messages.indexOf('Failed to handle a Telegram update'));
+        });
+
+        it('still handles an unrecognized update after logging it', async () => {
+            await postWebhook({ update_id: 7, ...textMessage('hello') });
+
+            assert.deepEqual(callsOf('findOrCreateChat'), [[10, 'Anna']]);
+        });
+
+        it('does not log a rejected request', async () => {
+            await postWebhook(textMessage('/word'), {});
+
+            assert.deepEqual(updateLogs(), []);
+            assert.deepEqual(unrecognizedLogs(), []);
         });
     });
 
@@ -442,6 +625,7 @@ describe('index', () => {
             assert.deepEqual(response.json(), { ok: true, chats: 2, sent: 2, failed: 0 });
             assert.equal(callsOf('getWord').length, 1);
             assert.deepEqual(callsOf('sendQuiz'), [[1, word], [3, word]]);
+            assert.deepEqual(callsOf('savePoll'), [['poll-1', 1, 1], ['poll-1', 1, 1]]);
         });
 
         it('does not pick a word when all chats unsubscribed', async () => {
@@ -464,6 +648,7 @@ describe('index', () => {
                 if (chatId === 2) {
                     throw new Error('Forbidden: bot was blocked by the user');
                 }
+                return { pollId: `poll-${chatId}`, correctOptionId: 0 };
             };
 
             const response = await app.inject({ method: 'GET', url: '/scheduler' });
@@ -471,6 +656,19 @@ describe('index', () => {
             assert.equal(response.statusCode, 200);
             assert.deepEqual(response.json(), { ok: true, chats: 3, sent: 2, failed: 1 });
             assert.deepEqual(callsOf('sendQuiz').map(([chatId]) => chatId), [1, 2, 3]);
+            assert.deepEqual(callsOf('savePoll'), [['poll-1', 1, 0], ['poll-3', 1, 0]]);
+        });
+
+        it('counts a quiz as sent when only saving its poll fails', async () => {
+            stubs.getWord = () => ({ id: 1 });
+            stubs.getChats = () => [{ id: 1, subscribed: new Date(), unsubscribed: null }];
+            stubs.savePoll = () => {
+                throw new Error('Firestore unavailable');
+            };
+
+            const response = await app.inject({ method: 'GET', url: '/scheduler' });
+
+            assert.deepEqual(response.json(), { ok: true, chats: 1, sent: 1, failed: 0 });
         });
 
         it('returns 500 when sending fails', async () => {
