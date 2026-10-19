@@ -1,4 +1,9 @@
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+const { wait } = require('./wait');
+
+const TOO_MANY_REQUESTS = 429;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const DEFAULT_RETRY_AFTER_SECONDS = 1;
 
 let botToken;
 
@@ -11,7 +16,12 @@ const loadBotToken = async () => {
     botToken = version.payload.data.toString();
 };
 
-const callTelegramApi = async (method, payload) => {
+const getRetryAfterMs = async (response) => {
+    const body = await response.json().catch(() => ({}));
+    return (body.parameters?.retry_after ?? DEFAULT_RETRY_AFTER_SECONDS) * 1000;
+};
+
+const callTelegramApi = async (method, payload, retry = 0) => {
     if (!botToken) {
         throw new Error('Bot token is not loaded, call loadBotToken() on startup');
     }
@@ -20,6 +30,10 @@ const callTelegramApi = async (method, payload) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
     });
+    if (response.status === TOO_MANY_REQUESTS && retry < MAX_RATE_LIMIT_RETRIES) {
+        await wait(await getRetryAfterMs(response));
+        return callTelegramApi(method, payload, retry + 1);
+    }
     if (!response.ok) {
         throw new Error(`Telegram API ${method} failed with status ${response.status}: ${await response.text()}`);
     }

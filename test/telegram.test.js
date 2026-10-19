@@ -5,7 +5,7 @@ const { mockModule } = require('./helpers/mock-module');
 
 const TELEGRAM_BOT_URL = 'https://api.telegram.org/bottest-token';
 
-const state = { posts: [], requests: [], secretRequests: [], response: null };
+const state = { posts: [], requests: [], secretRequests: [], responses: [], response: null };
 
 const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), {
     status,
@@ -15,7 +15,7 @@ const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), 
 const fakeFetch = async (url, options) => {
     state.requests.push({ url, options });
     state.posts.push({ url: url.replace(TELEGRAM_BOT_URL, ''), payload: JSON.parse(options.body) });
-    return state.response ?? jsonResponse({ ok: true, result: {} });
+    return state.responses.shift() ?? state.response ?? jsonResponse({ ok: true, result: {} });
 };
 
 mockModule('@google-cloud/secret-manager', {
@@ -41,6 +41,7 @@ describe('telegram', () => {
     beforeEach(() => {
         state.posts = [];
         state.requests = [];
+        state.responses = [];
         state.response = null;
         globalThis.fetch = fakeFetch;
     });
@@ -97,6 +98,24 @@ describe('telegram', () => {
 
             await assert.rejects(telegram.sendQuiz(1, word));
             assert.deepEqual(state.posts.map(({ url }) => url), ['/sendPoll']);
+        });
+
+        it('retries after the rate limit delay on 429', async () => {
+            state.responses = [
+                jsonResponse({ ok: false, parameters: { retry_after: 0 } }, 429),
+                jsonResponse({ ok: true, result: { message_id: 7 } }),
+            ];
+
+            assert.deepEqual(await telegram.sendMessage(1, 'hello'), { ok: true, result: { message_id: 7 } });
+            assert.equal(state.requests.length, 2);
+        });
+
+        it('gives up after 3 rate limit retries', async () => {
+            state.responses = Array.from({ length: 4 }, () =>
+                jsonResponse({ ok: false, description: 'Too Many Requests', parameters: { retry_after: 0 } }, 429));
+
+            await assert.rejects(telegram.sendMessage(1, 'hello'), /failed with status 429: .*Too Many Requests/);
+            assert.equal(state.requests.length, 4);
         });
 
         it('propagates network errors', async () => {

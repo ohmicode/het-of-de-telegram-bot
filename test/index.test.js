@@ -223,9 +223,38 @@ describe('index', () => {
 
             const response = await app.inject({ method: 'GET', url: '/scheduler' });
 
-            assert.deepEqual(response.json(), { ok: true, chats: 3 });
+            assert.deepEqual(response.json(), { ok: true, chats: 2, sent: 2, failed: 0 });
             assert.equal(callsOf('getWord').length, 1);
             assert.deepEqual(callsOf('sendQuiz'), [[1, word], [3, word]]);
+        });
+
+        it('does not pick a word when all chats unsubscribed', async () => {
+            stubs.getChats = () => [{ id: 1, subscribed: new Date(), unsubscribed: new Date() }];
+
+            const response = await app.inject({ method: 'GET', url: '/scheduler' });
+
+            assert.deepEqual(response.json(), { ok: true, chats: 0 });
+            assert.deepEqual(callsOf('getWord'), []);
+        });
+
+        it('keeps sending when one chat fails and reports it without failing the request', async () => {
+            stubs.getWord = () => ({ id: 1 });
+            stubs.getChats = () => [
+                { id: 1, subscribed: new Date(), unsubscribed: null },
+                { id: 2, subscribed: new Date(), unsubscribed: null },
+                { id: 3, subscribed: new Date(), unsubscribed: null },
+            ];
+            stubs.sendQuiz = (chatId) => {
+                if (chatId === 2) {
+                    throw new Error('Forbidden: bot was blocked by the user');
+                }
+            };
+
+            const response = await app.inject({ method: 'GET', url: '/scheduler' });
+
+            assert.equal(response.statusCode, 200);
+            assert.deepEqual(response.json(), { ok: true, chats: 3, sent: 2, failed: 1 });
+            assert.deepEqual(callsOf('sendQuiz').map(([chatId]) => chatId), [1, 2, 3]);
         });
 
         it('returns 500 when sending fails', async () => {

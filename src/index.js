@@ -4,6 +4,7 @@ const fastify = require('fastify')({
 
 const { getChats, getWord, getWordById, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
 const { loadBotToken, sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
+const { isActiveSubscriber, sendQuizzes } = require('./scheduler');
 
 const HELP_MESSAGE = `
 Welcome to "De of Het" bot!
@@ -90,20 +91,20 @@ fastify.post('/webhook', async (request, reply) => {
 
 fastify.get('/scheduler', async (request, reply) => {
     try {
-        const chats = await getChats();
-        if (chats.length === 0) {
+        const subscribers = (await getChats()).filter(isActiveSubscriber);
+        if (subscribers.length === 0) {
             reply.send({ ok: true, chats: 0 });
             return;
         }
 
         const word = await getWord();
+        const { sent, failures } = await sendQuizzes(
+            subscribers.map(chat => chat.id),
+            chatId => sendQuiz(chatId, word),
+        );
 
-        for (const chat of chats) {
-            if (chat.subscribed && !chat.unsubscribed) {
-                await sendQuiz(chat.id, word);
-            }
-        }
-        reply.send({ ok: true, chats: chats.length });
+        failures.forEach(({ chatId, error }) => fastify.log.warn({ chatId, err: error }, 'Failed to send a quiz'));
+        reply.send({ ok: true, chats: subscribers.length, sent, failed: failures.length });
     } catch (error) {
         fastify.log.error(error);
         reply.status(500).send({ ok: false, error: 'Failed to send quizzes' });

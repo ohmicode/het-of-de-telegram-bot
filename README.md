@@ -93,6 +93,8 @@ This application is designed to be deployed as a container on Google Cloud Run. 
 
 To send daily quizzes to subscribers, set up a scheduler (e.g., Google Cloud Scheduler) to make a GET request to the `/scheduler` endpoint of the service once a day.
 
+Quizzes are sent in batches of 15 chats per second to stay within Telegram rate limits. A failure for one chat does not stop the others: the endpoint still responds with `200`, so the scheduler does not retry and resend quizzes to chats that already received one. The response reports the result, e.g. `{ "ok": true, "chats": 120, "sent": 119, "failed": 1 }`, and every failed chat is logged as a warning.
+
 ## Uploading words to Firestore
 
 There is a Python script in `tools/upload` that can be used to upload a CSV file with words to Firestore.
