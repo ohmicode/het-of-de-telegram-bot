@@ -50,6 +50,9 @@ const COMMANDS = {
     },
 };
 
+const resolveName = (chat, from) =>
+    chat.first_name || chat.username || from?.first_name || from?.username || chat.title || null;
+
 const findCommand = (name) => (Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : undefined);
 
 const parseCommandName = (text) => text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
@@ -59,7 +62,7 @@ fastify.post('/webhook', async (request, reply) => {
 
     if (message) {
         const chatId = message.chat.id;
-        const chatName = message.chat.first_name || message.chat.username;
+        const chatName = resolveName(message.chat, message.from);
         await findOrCreateChat(chatId, chatName);
 
         const command = message.text && findCommand(parseCommandName(message.text));
@@ -79,7 +82,7 @@ fastify.post('/webhook', async (request, reply) => {
             await command(chatId);
         } else if (data.startsWith('/report_bug_')) {
             const wordId = data.replace('/report_bug_', '');
-            const chatName = callback_query.message.chat.first_name || callback_query.message.chat.username;
+            const chatName = resolveName(callback_query.message.chat, callback_query.from);
             await reportMistake(wordId, chatId, chatName);
             await sendMessage(chatId, 'Thanks for the heads-up!');
         } else if (data.startsWith('/explain_')) {

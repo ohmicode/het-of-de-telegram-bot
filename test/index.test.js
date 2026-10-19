@@ -93,6 +93,47 @@ describe('index', () => {
             assert.deepEqual(callsOf('findOrCreateChat'), [[11, 'anna_nl']]);
         });
 
+        describe('group chats', () => {
+            const groupChat = { id: -100, type: 'group', title: 'Dutch class' };
+            const groupMessage = (from) => ({ message: { chat: groupChat, from, text: 'hi' } });
+
+            it('takes the name from the sender first name', async () => {
+                await postWebhook(groupMessage({ id: 5, first_name: 'Bram', username: 'bram_nl' }));
+
+                assert.deepEqual(callsOf('findOrCreateChat'), [[-100, 'Bram']]);
+            });
+
+            it('falls back to the sender username', async () => {
+                await postWebhook(groupMessage({ id: 5, username: 'bram_nl' }));
+
+                assert.deepEqual(callsOf('findOrCreateChat'), [[-100, 'bram_nl']]);
+            });
+
+            it('falls back to the chat title when the sender has no name', async () => {
+                await postWebhook(groupMessage({ id: 5 }));
+
+                assert.deepEqual(callsOf('findOrCreateChat'), [[-100, 'Dutch class']]);
+            });
+
+            it('falls back to the chat title when there is no sender', async () => {
+                await postWebhook(groupMessage(undefined));
+
+                assert.deepEqual(callsOf('findOrCreateChat'), [[-100, 'Dutch class']]);
+            });
+        });
+
+        it('prefers the private chat name over the sender name', async () => {
+            await postWebhook({ message: { chat: { id: 10, first_name: 'Anna' }, from: { id: 10, first_name: 'Other' }, text: 'hi' } });
+
+            assert.deepEqual(callsOf('findOrCreateChat'), [[10, 'Anna']]);
+        });
+
+        it('stores null instead of undefined when no name is available', async () => {
+            await postWebhook({ message: { chat: { id: 12 }, text: 'hi' } });
+
+            assert.deepEqual(callsOf('findOrCreateChat'), [[12, null]]);
+        });
+
         it('registers the chat for messages without text', async () => {
             await postWebhook({ message: { chat: { id: 10, first_name: 'Anna' } } });
 
@@ -198,6 +239,19 @@ describe('index', () => {
             await postWebhook(callbackQuery('/report_bug_42', { id: 11, username: 'anna_nl' }));
 
             assert.deepEqual(callsOf('reportMistake'), [['42', 11, 'anna_nl']]);
+        });
+
+        it('reports a mistake in a group chat with the name of the user who pressed the button', async () => {
+            await postWebhook({
+                callback_query: {
+                    id: 'cb-1',
+                    data: '/report_bug_42',
+                    from: { id: 5, first_name: 'Bram' },
+                    message: { chat: { id: -100, type: 'group', title: 'Dutch class' }, from: { id: 1, first_name: 'Bot', is_bot: true } },
+                },
+            });
+
+            assert.deepEqual(callsOf('reportMistake'), [['42', -100, 'Bram']]);
         });
     });
 
