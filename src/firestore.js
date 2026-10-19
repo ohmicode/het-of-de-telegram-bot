@@ -26,6 +26,17 @@ const getWord = async () => {
     return wordSnapshot.docs[0].data();
 }
 
+const getWordById = async (wordId) => {
+    const wordSnapshot = await firestore.collection('dictionary')
+        .where('id', '==', Number(wordId))
+        .limit(1).get();
+
+    if (wordSnapshot.empty) {
+        return null;
+    }
+    return wordSnapshot.docs[0].data();
+}
+
 const findOrCreateChat = async (chatId, name) => {
     const chatRef = firestore.collection('chats').doc(chatId.toString());
     const chatSnapshot = await chatRef.get();
@@ -70,6 +81,7 @@ const reportMistake = async (wordId, chatId, userName) => {
 module.exports = {
     getChats,
     getWord,
+    getWordById,
     findOrCreateChat,
     subscribe,
     unsubscribe,

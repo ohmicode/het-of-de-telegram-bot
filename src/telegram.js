@@ -53,8 +53,9 @@ const sendQuiz = async (chatId, word) => {
 
     return sendMessage(chatId, 'Do you want to learn more?', {
         inline_keyboard: [
-            [{ text: 'Next word', callback_data: '/word' }],
-            [{ text: 'Report a bug', callback_data: `/report_bug_${word.id}` }]
+            [{ text: 'Explain', callback_data: `/explain_${word.id}` }],
+            [{ text: 'Report a bug', callback_data: `/report_bug_${word.id}` }],
+            [{ text: 'Next word', callback_data: '/word' }]
         ]
     });
 };

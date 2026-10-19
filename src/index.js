@@ -2,7 +2,7 @@ const fastify = require('fastify')({
     logger: true
 });
 
-const { getChats, getWord, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
+const { getChats, getWord, getWordById, findOrCreateChat, subscribe, unsubscribe, reportMistake } = require('./firestore');
 const { sendMessage, sendQuiz, answerCallbackQuery } = require('./telegram');
 
 const HELP_MESSAGE = `
@@ -17,6 +17,11 @@ Commands:
 
 You can also use the buttons to interact with the bot.
 `;
+
+const NO_EXPLANATION_MESSAGE = 'rule unknown - just memorize it';
+const WORD_NOT_FOUND_MESSAGE = 'Sorry, this word was not found.';
+
+const formatExplanation = (word) => `${word.article} ${word.dutch}\n${word.explanation || NO_EXPLANATION_MESSAGE}`;
 
 fastify.post('/webhook', async (request, reply) => {
     const { message, callback_query } = request.body;
@@ -73,6 +78,10 @@ fastify.post('/webhook', async (request, reply) => {
             const chatName = callback_query.message.chat.first_name || callback_query.message.chat.username;
             await reportMistake(wordId, chatId, chatName);
             await sendMessage(chatId, 'Thanks for the heads-up!');
+        } else if (data.startsWith('/explain_')) {
+            const wordId = data.replace('/explain_', '');
+            const word = await getWordById(wordId);
+            await sendMessage(chatId, word ? formatExplanation(word) : WORD_NOT_FOUND_MESSAGE);
         }
     }
 
