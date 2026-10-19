@@ -1,16 +1,22 @@
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { mockModule } = require('./helpers/mock-module');
 
-const state = { posts: [], axiosConfigs: [], secretRequests: [] };
+const TELEGRAM_BOT_URL = 'https://api.telegram.org/bottest-token';
 
-mockModule('axios', {
-    create: (config) => {
-        state.axiosConfigs.push(config);
-        return { post: async (url, payload) => state.posts.push({ url, payload }) };
-    },
+const state = { posts: [], requests: [], secretRequests: [], response: null };
+
+const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
 });
+
+const fakeFetch = async (url, options) => {
+    state.requests.push({ url, options });
+    state.posts.push({ url: url.replace(TELEGRAM_BOT_URL, ''), payload: JSON.parse(options.body) });
+    return state.response ?? jsonResponse({ ok: true, result: {} });
+};
 
 mockModule('@google-cloud/secret-manager', {
     SecretManagerServiceClient: class {
@@ -30,9 +36,17 @@ const telegram = require(path.join(__dirname, '../src/telegram'));
 const word = { id: 42, english: 'the book', example: 'I read the book.', dutch: 'boek', article: 'het' };
 
 describe('telegram', () => {
+    const originalFetch = globalThis.fetch;
+
     beforeEach(() => {
         state.posts = [];
-        state.axiosConfigs = [];
+        state.requests = [];
+        state.response = null;
+        globalThis.fetch = fakeFetch;
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
     });
 
     it('reads the bot token from Secret Manager only once', async () => {
@@ -42,7 +56,50 @@ describe('telegram', () => {
         assert.deepEqual(state.secretRequests, [
             { name: 'projects/test-project/secrets/het-of-de-token/versions/latest' },
         ]);
-        assert.ok(state.axiosConfigs.every(config => config.baseURL === 'https://api.telegram.org/bottest-token'));
+        assert.ok(state.requests.every(({ url }) => url.startsWith(`${TELEGRAM_BOT_URL}/`)));
+    });
+
+    describe('Telegram API calls', () => {
+        it('posts JSON to the bot method URL', async () => {
+            await telegram.sendMessage(1, 'hello');
+
+            const [{ url, options }] = state.requests;
+            assert.equal(url, `${TELEGRAM_BOT_URL}/sendMessage`);
+            assert.equal(options.method, 'POST');
+            assert.deepEqual(options.headers, { 'Content-Type': 'application/json' });
+        });
+
+        it('returns the parsed Telegram response', async () => {
+            state.response = jsonResponse({ ok: true, result: { message_id: 7 } });
+
+            assert.deepEqual(await telegram.sendMessage(1, 'hello'), { ok: true, result: { message_id: 7 } });
+        });
+
+        it('throws on a non-2xx response without exposing the token', async () => {
+            state.response = jsonResponse({ ok: false, description: 'Bad Request: chat not found' }, 400);
+
+            await assert.rejects(telegram.sendMessage(1, 'hello'), (error) => {
+                assert.match(error.message, /Telegram API sendMessage failed with status 400/);
+                assert.match(error.message, /chat not found/);
+                assert.doesNotMatch(error.message, /test-token/);
+                return true;
+            });
+        });
+
+        it('does not send the follow-up message when the poll fails', async () => {
+            state.response = jsonResponse({ ok: false }, 500);
+
+            await assert.rejects(telegram.sendQuiz(1, word));
+            assert.deepEqual(state.posts.map(({ url }) => url), ['/sendPoll']);
+        });
+
+        it('propagates network errors', async () => {
+            globalThis.fetch = async () => {
+                throw new TypeError('fetch failed');
+            };
+
+            await assert.rejects(telegram.answerCallbackQuery('cb-1'), /fetch failed/);
+        });
     });
 
     describe('sendMessage', () => {

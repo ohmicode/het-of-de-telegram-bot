@@ -1,4 +1,3 @@
-const axios = require('axios');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 
 let botToken;
@@ -17,15 +16,20 @@ const getBotToken = async () => {
     return botToken;
 };
 
-const getTelegramApi = async () => {
+const callTelegramApi = async (method, payload) => {
     const token = await getBotToken();
-    return axios.create({
-        baseURL: `https://api.telegram.org/bot${token}`,
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
     });
+    if (!response.ok) {
+        throw new Error(`Telegram API ${method} failed with status ${response.status}: ${await response.text()}`);
+    }
+    return response.json();
 };
 
 const sendMessage = async (chatId, text, reply_markup = undefined) => {
-    const telegramApi = await getTelegramApi();
     const payload = {
         chat_id: chatId,
         text,
@@ -33,17 +37,15 @@ const sendMessage = async (chatId, text, reply_markup = undefined) => {
     if (reply_markup) {
         payload.reply_markup = reply_markup;
     }
-    return telegramApi.post('/sendMessage', payload);
+    return callTelegramApi('sendMessage', payload);
 };
 
 const sendQuiz = async (chatId, word) => {
-    const telegramApi = await getTelegramApi();
-
     const question = `"${word.english}".\n(${word.example})`;
     const options = [`de ${word.dutch}`, `het ${word.dutch}`];
     const correctOptionId = word.article === 'de' ? 0 : 1;
 
-    await telegramApi.post('/sendPoll', {
+    await callTelegramApi('sendPoll', {
         chat_id: chatId,
         question,
         options: JSON.stringify(options),
@@ -62,8 +64,7 @@ const sendQuiz = async (chatId, word) => {
 
 const answerCallbackQuery = async (callbackQueryId) => {
     // console.log(`callbackQueryId = ${callbackQueryId}`);
-    const telegramApi = await getTelegramApi();
-    return telegramApi.post('/answerCallbackQuery', {
+    return callTelegramApi('answerCallbackQuery', {
         callback_query_id: callbackQueryId,
     });
 };

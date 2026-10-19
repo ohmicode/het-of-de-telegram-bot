@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node dist/index.js | pino-pretty",
-    "build": "esbuild src/index.js --bundle --platform=node --target=node20 --outfile=dist/index.js --minify",
+    "build": "esbuild src/index.js --bundle --platform=node --target=node26 --outfile=dist/index.js --minify",
     "test": "node --test test/*.test.js"
   },
   "keywords": [
@@ -20,7 +20,6 @@
   "dependencies": {
     "@google-cloud/firestore": "^7.7.0",
     "@google-cloud/secret-manager": "^5.5.0",
-    "axios": "^1.7.2",
     "fastify": "^5.7.4"
   },
   "devDependencies": {
