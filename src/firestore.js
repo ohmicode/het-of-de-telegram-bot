@@ -71,7 +71,7 @@ const unsubscribe = async (chatId) => {
 
 const reportMistake = async (wordId, chatId, userName) => {
     await firestore.collection('mistakes').add({
-        word_id: wordId,
+        word_id: Number(wordId),
         chat_id: chatId,
         name: userName,
         reported: new Date(),

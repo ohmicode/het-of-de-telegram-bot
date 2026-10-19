@@ -189,10 +189,22 @@ describe('firestore', () => {
 
             const [{ collection, data }] = fake.state.added;
             assert.equal(collection, 'mistakes');
-            assert.equal(data.word_id, '42');
+            assert.equal(data.word_id, 42);
             assert.equal(data.chat_id, 5);
             assert.equal(data.name, 'Anna');
             assert.ok(data.reported instanceof Date);
+        });
+
+        it('stores the word id as a number, matching dictionary.id', async () => {
+            await firestore.reportMistake('7', 5, 'Anna');
+
+            assert.equal(typeof fake.state.added[0].data.word_id, 'number');
+        });
+
+        it('keeps a numeric word id unchanged', async () => {
+            await firestore.reportMistake(42, 5, 'Anna');
+
+            assert.equal(fake.state.added[0].data.word_id, 42);
         });
     });
 });
