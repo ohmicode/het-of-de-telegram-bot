@@ -1,0 +1,9 @@
+# Sets de-profile-logo.jpeg as the bot profile photo (Bot API method setMyProfilePhoto).
+# Run from the bot-settings folder. Replace TELEGRAM_TOKEN with the bot token.
+# Telegram requires a .JPG file uploaded as multipart/form-data; profile photos cannot be reused by file_id or URL.
+
+curl -X POST "https://api.telegram.org/botTELEGRAM_TOKEN/setMyProfilePhoto" \
+  -F 'photo={"type":"static","photo":"attach://profile_photo"}' \
+  -F "profile_photo=@de-profile-logo.jpeg;type=image/jpeg"
+
+# Expected response: {"ok":true,"result":true}

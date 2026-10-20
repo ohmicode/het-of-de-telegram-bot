@@ -1,0 +1,17 @@
+# Sets the list of slash-commands shown in the bot menu (Bot API method setMyCommands).
+# Replace TELEGRAM_TOKEN with the bot token.
+
+curl -X POST "https://api.telegram.org/botTELEGRAM_TOKEN/setMyCommands" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commands": [
+      {"command": "word", "description": "Get a quiz with a new random word"},
+      {"command": "subscribe", "description": "Receive one quiz every day"},
+      {"command": "unsubscribe", "description": "Stop the daily quiz"},
+      {"command": "help", "description": "How the bot works and the list of commands"}
+    ]
+  }'
+
+# Expected response: {"ok":true,"result":true}
+# To verify the current list:
+# curl "https://api.telegram.org/botTELEGRAM_TOKEN/getMyCommands"
